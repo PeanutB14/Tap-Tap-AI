@@ -1,0 +1,44 @@
+import telebot
+import time
+
+# Bot API Token from BotFather
+API_TOKEN = 'your-telegram-bot-api-token'
+
+bot = telebot.TeleBot(API_TOKEN)
+
+# /start command initiates the interaction
+@bot.message_handler(commands=['start'])
+def start_game(message):
+    chat_id = message.chat.id
+    bot.send_message(chat_id, "Hello! I am your game-playing bot. Let's start the BlumCryptoBot game!")
+
+    # Example of sending the first move
+    time.sleep(2)
+    bot.send_message(chat_id, "/play")  # Assuming /play starts the game in BlumCryptoBot
+    
+    # From here, you would need to read the game's state and act accordingly.
+    # This requires analyzing the game prompts to react based on rules
+
+# The main game logic should be here, based on the specific mini-game's response
+@bot.message_handler(func=lambda message: True)
+def handle_game_response(message):
+    chat_id = message.chat.id
+    game_response = message.text
+
+    # Analyze the game response and send back moves
+    if "choose your move" in game_response.lower():
+        # Assuming the game gives a choice of moves
+        moves = ['Option 1', 'Option 2', 'Option 3']
+        bot.send_message(chat_id, "I will choose Option 1.")
+        bot.send_message(chat_id, moves[0])
+    elif "you won" in game_response.lower():
+        bot.send_message(chat_id, "Great! I won the round!")
+    elif "you lost" in game_response.lower():
+        bot.send_message(chat_id, "Oops! I lost. Let me try again.")
+        bot.send_message(chat_id, "/play")  # Restart the game
+
+    # Add more game logic based on game responses.
+
+
+# Polling to continuously listen for new messages
+bot.polling()
