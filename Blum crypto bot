@@ -1,44 +1,300 @@
 import telebot
 import time
+import logging
+import os
+from typing import Dict, List, Optional
+from enum import Enum
+import json
 
-# Bot API Token from BotFather
-API_TOKEN = 'your-telegram-bot-api-token'
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-bot = telebot.TeleBot(API_TOKEN)
+class GameState(Enum):
+    """Game state enumeration"""
+    IDLE = "idle"
+    WAITING_FOR_GAME_START = "waiting_for_start"
+    IN_GAME = "in_game"
+    GAME_ENDED = "game_ended"
 
-# /start command initiates the interaction
-@bot.message_handler(commands=['start'])
-def start_game(message):
-    chat_id = message.chat.id
-    bot.send_message(chat_id, "Hello! I am your game-playing bot. Let's start the BlumCryptoBot game!")
-
-    # Example of sending the first move
-    time.sleep(2)
-    bot.send_message(chat_id, "/play")  # Assuming /play starts the game in BlumCryptoBot
+class BlumGameBot:
+    """Enhanced Telegram bot for playing BlumCryptoBot games"""
     
-    # From here, you would need to read the game's state and act accordingly.
-    # This requires analyzing the game prompts to react based on rules
+    def __init__(self, api_token: str):
+        self.bot = telebot.TeleBot(api_token)
+        self.user_states: Dict[int, GameState] = {}
+        self.game_data: Dict[int, dict] = {}
+        self.setup_handlers()
+        
+    def setup_handlers(self):
+        """Setup message handlers"""
+        self.bot.message_handler(commands=['start'])(self.start_command)
+        self.bot.message_handler(commands=['help'])(self.help_command)
+        self.bot.message_handler(commands=['status'])(self.status_command)
+        self.bot.message_handler(commands=['stop'])(self.stop_command)
+        self.bot.message_handler(func=lambda message: True)(self.handle_message)
+        
+    def get_user_state(self, chat_id: int) -> GameState:
+        """Get current state for a user"""
+        return self.user_states.get(chat_id, GameState.IDLE)
+    
+    def set_user_state(self, chat_id: int, state: GameState):
+        """Set state for a user"""
+        self.user_states[chat_id] = state
+        logger.info(f"User {chat_id} state changed to {state.value}")
+    
+    def start_command(self, message):
+        """Handle /start command"""
+        chat_id = message.chat.id
+        try:
+            self.set_user_state(chat_id, GameState.WAITING_FOR_GAME_START)
+            self.game_data[chat_id] = {
+                'wins': 0,
+                'losses': 0,
+                'games_played': 0,
+                'last_move': None
+            }
+            
+            welcome_msg = (
+                "🎮 **BlumCrypto Game Bot** 🎮\n\n"
+                "Welcome! I'm ready to play BlumCryptoBot games with you.\n\n"
+                "**Commands:**\n"
+                "• `/start` - Start the bot\n"
+                "• `/help` - Show help\n"
+                "• `/status` - Show game statistics\n"
+                "• `/stop` - Stop the bot\n\n"
+                "Starting the game now..."
+            )
+            
+            self.bot.send_message(chat_id, welcome_msg, parse_mode='Markdown')
+            
+            # Wait and then initiate game
+            time.sleep(2)
+            self.initiate_game(chat_id)
+            
+        except Exception as e:
+            logger.error(f"Error in start_command: {e}")
+            self.bot.send_message(chat_id, "❌ Error starting the bot. Please try again.")
+    
+    def help_command(self, message):
+        """Handle /help command"""
+        chat_id = message.chat.id
+        help_text = (
+            "🆘 **Help - BlumCrypto Game Bot**\n\n"
+            "This bot automatically plays BlumCryptoBot mini-games.\n\n"
+            "**Available Commands:**\n"
+            "• `/start` - Initialize and start playing\n"
+            "• `/help` - Show this help message\n"
+            "• `/status` - Display game statistics\n"
+            "• `/stop` - Stop the bot and reset\n\n"
+            "**Game Features:**\n"
+            "• Automatic game detection\n"
+            "• Smart move selection\n"
+            "• Win/loss tracking\n"
+            "• Auto-restart on game end\n\n"
+            "The bot will automatically respond to game prompts!"
+        )
+        self.bot.send_message(chat_id, help_text, parse_mode='Markdown')
+    
+    def status_command(self, message):
+        """Handle /status command"""
+        chat_id = message.chat.id
+        if chat_id not in self.game_data:
+            self.bot.send_message(chat_id, "❌ No game data available. Use /start first.")
+            return
+            
+        data = self.game_data[chat_id]
+        state = self.get_user_state(chat_id)
+        
+        win_rate = (data['wins'] / data['games_played'] * 100) if data['games_played'] > 0 else 0
+        
+        status_text = (
+            f"📊 **Game Statistics**\n\n"
+            f"**Current State:** {state.value.title()}\n"
+            f"**Games Played:** {data['games_played']}\n"
+            f"**Wins:** {data['wins']} 🏆\n"
+            f"**Losses:** {data['losses']} 💔\n"
+            f"**Win Rate:** {win_rate:.1f}%\n"
+            f"**Last Move:** {data['last_move'] or 'None'}"
+        )
+        
+        self.bot.send_message(chat_id, status_text, parse_mode='Markdown')
+    
+    def stop_command(self, message):
+        """Handle /stop command"""
+        chat_id = message.chat.id
+        self.set_user_state(chat_id, GameState.IDLE)
+        if chat_id in self.game_data:
+            del self.game_data[chat_id]
+        
+        self.bot.send_message(chat_id, "🛑 Bot stopped. Use /start to begin again.")
+    
+    def initiate_game(self, chat_id: int):
+        """Start a new game"""
+        try:
+            self.bot.send_message(chat_id, "🎯 Starting new game...")
+            time.sleep(1)
+            self.bot.send_message(chat_id, "/play")
+            self.set_user_state(chat_id, GameState.IN_GAME)
+            
+        except Exception as e:
+            logger.error(f"Error initiating game for {chat_id}: {e}")
+    
+    def analyze_game_response(self, message_text: str) -> Dict[str, any]:
+        """Analyze game response and determine action"""
+        text_lower = message_text.lower()
+        
+        analysis = {
+            'action': 'wait',
+            'response': None,
+            'game_ended': False,
+            'won': False
+        }
+        
+        # Game choice detection
+        choice_keywords = ['choose', 'select', 'pick', 'option', 'move']
+        if any(keyword in text_lower for keyword in choice_keywords):
+            analysis['action'] = 'make_choice'
+            analysis['response'] = self.select_best_option(message_text)
+        
+        # Win detection
+        win_keywords = ['you won', 'victory', 'congratulations', 'you win', 'success']
+        if any(keyword in text_lower for keyword in win_keywords):
+            analysis['game_ended'] = True
+            analysis['won'] = True
+            analysis['action'] = 'celebrate_win'
+        
+        # Loss detection
+        loss_keywords = ['you lost', 'you lose', 'defeat', 'game over', 'failed']
+        if any(keyword in text_lower for keyword in loss_keywords):
+            analysis['game_ended'] = True
+            analysis['won'] = False
+            analysis['action'] = 'handle_loss'
+        
+        # Game start detection
+        start_keywords = ['game started', 'let\'s play', 'round', 'begin']
+        if any(keyword in text_lower for keyword in start_keywords):
+            analysis['action'] = 'game_started'
+        
+        return analysis
+    
+    def select_best_option(self, message_text: str) -> str:
+        """Select the best option based on game context"""
+        # Simple strategy - can be enhanced with ML or more sophisticated logic
+        common_options = ['option 1', 'option a', 'yes', 'attack', 'defend', 'left', 'right']
+        
+        text_lower = message_text.lower()
+        
+        # Look for numbered options
+        if '1)' in text_lower or 'option 1' in text_lower:
+            return "1"
+        elif '2)' in text_lower or 'option 2' in text_lower:
+            return "2"
+        elif '3)' in text_lower or 'option 3' in text_lower:
+            return "3"
+        
+        # Look for letter options
+        if 'a)' in text_lower or 'option a' in text_lower:
+            return "A"
+        elif 'b)' in text_lower or 'option b' in text_lower:
+            return "B"
+        
+        # Default fallback
+        return "1"
+    
+    def handle_message(self, message):
+        """Handle all incoming messages"""
+        chat_id = message.chat.id
+        message_text = message.text or ""
+        
+        try:
+            current_state = self.get_user_state(chat_id)
+            
+            if current_state == GameState.IDLE:
+                self.bot.send_message(chat_id, "Use /start to begin playing!")
+                return
+            
+            # Analyze the game response
+            analysis = self.analyze_game_response(message_text)
+            
+            # Execute action based on analysis
+            if analysis['action'] == 'make_choice':
+                choice = analysis['response']
+                self.game_data[chat_id]['last_move'] = choice
+                
+                self.bot.send_message(chat_id, f"🎯 Making move: {choice}")
+                time.sleep(1)
+                self.bot.send_message(chat_id, choice)
+                
+            elif analysis['action'] == 'celebrate_win':
+                self.handle_game_end(chat_id, won=True)
+                
+            elif analysis['action'] == 'handle_loss':
+                self.handle_game_end(chat_id, won=False)
+                
+            elif analysis['action'] == 'game_started':
+                self.set_user_state(chat_id, GameState.IN_GAME)
+                self.bot.send_message(chat_id, "🎮 Game detected! Playing...")
+            
+            # Log the interaction
+            logger.info(f"User {chat_id}: {message_text[:50]}... | Action: {analysis['action']}")
+            
+        except Exception as e:
+            logger.error(f"Error handling message from {chat_id}: {e}")
+            self.bot.send_message(chat_id, "❌ Error processing message. Continuing...")
+    
+    def handle_game_end(self, chat_id: int, won: bool):
+        """Handle game end scenario"""
+        try:
+            if chat_id not in self.game_data:
+                self.game_data[chat_id] = {'wins': 0, 'losses': 0, 'games_played': 0, 'last_move': None}
+            
+            self.game_data[chat_id]['games_played'] += 1
+            
+            if won:
+                self.game_data[chat_id]['wins'] += 1
+                self.bot.send_message(chat_id, "🎉 Victory! Great game!")
+            else:
+                self.game_data[chat_id]['losses'] += 1
+                self.bot.send_message(chat_id, "💔 Lost this round. Let's try again!")
+            
+            # Wait before restarting
+            time.sleep(3)
+            self.bot.send_message(chat_id, "🔄 Starting next game...")
+            time.sleep(2)
+            self.initiate_game(chat_id)
+            
+        except Exception as e:
+            logger.error(f"Error handling game end for {chat_id}: {e}")
+    
+    def run(self):
+        """Start the bot"""
+        logger.info("🤖 BlumCrypto Game Bot started!")
+        try:
+            self.bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            logger.error(f"Bot polling error: {e}")
+            
+def main():
+    # Get API token from environment variable or replace with your token
+    API_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'your-telegram-bot-api-token')
+    
+    if API_TOKEN == 'your-telegram-bot-api-token':
+        print("❌ Please set your actual Telegram Bot API token!")
+        print("Either:")
+        print("1. Set environment variable: export TELEGRAM_BOT_TOKEN='your-token'")
+        print("2. Replace the token directly in the code")
+        return
+    
+    bot = BlumGameBot(API_TOKEN)
+    bot.run()
 
-# The main game logic should be here, based on the specific mini-game's response
-@bot.message_handler(func=lambda message: True)
-def handle_game_response(message):
-    chat_id = message.chat.id
-    game_response = message.text
-
-    # Analyze the game response and send back moves
-    if "choose your move" in game_response.lower():
-        # Assuming the game gives a choice of moves
-        moves = ['Option 1', 'Option 2', 'Option 3']
-        bot.send_message(chat_id, "I will choose Option 1.")
-        bot.send_message(chat_id, moves[0])
-    elif "you won" in game_response.lower():
-        bot.send_message(chat_id, "Great! I won the round!")
-    elif "you lost" in game_response.lower():
-        bot.send_message(chat_id, "Oops! I lost. Let me try again.")
-        bot.send_message(chat_id, "/play")  # Restart the game
-
-    # Add more game logic based on game responses.
-
-
-# Polling to continuously listen for new messages
-bot.polling()
+if __name__ == "__main__":
+    main()
